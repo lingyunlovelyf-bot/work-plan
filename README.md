@@ -1,6 +1,6 @@
-# 工作计划
+# Obsidian to Timebook
 
-本机用的任务清单。解压后双击就能开，不用安装 Python。
+工作计划。任务留在 Obsidian，一段时间通过 MCP 和 AI 记到时间书。解压后双击就能开，不用安装 Python。
 
 ## 背景
 
