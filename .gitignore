@@ -1,0 +1,6 @@
+timebook.local.json
+timebook-cache.json
+settings.json
+dist/
+__pycache__/
+*.pyc
