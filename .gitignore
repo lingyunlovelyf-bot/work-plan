@@ -1,5 +1,7 @@
 timebook.local.json
 timebook-cache.json
+loose-draft.json
+pop-refresh
 settings.json
 dist/
 __pycache__/

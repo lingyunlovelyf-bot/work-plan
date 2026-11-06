@@ -981,8 +981,10 @@
             <div class="set-row stack">
               <div>
                 <strong>收进哪些笔记</strong>
-                <p>文件名里要有下面其中一个词，才会收进来。没有这些词的，比如操作手册，不会出现。一行一个词。</p>
+                <p>文件名里要有下面其中一个词，才会收进来。没有这些词的，比如操作手册，不会出现。一行一个词。txt 里的任务也写成 - [ ]。</p>
               </div>
+              <label><input id="type-md" type="checkbox" checked> Markdown（.md）</label>
+              <label><input id="type-txt" type="checkbox"> 文本（.txt）</label>
               <textarea id="keywords" maxlength="800"></textarea>
             </div>
           </section>
@@ -1224,7 +1226,7 @@
     <div class="dialog" role="dialog" aria-label="自由记一笔">
       <button type="button" class="dialog-x" data-close="#loose-mask" aria-label="关闭">×</button>
       <h2>自由</h2>
-      <p class="hot-hint">一行一段：时间，分类，备注。1100 就是 11:00。单独的数字记成支出，28 是 28 元，27.8 是 27.8 元，备注里照原样留下。现在表示到此刻。回车换行，Alt+回车发送。# 搜任务。</p>
+      <p class="hot-hint">一行一段：时间，分类，备注。分类可以写名字或关键词，优化归到测试优化，洗杯子归到杂。1100 就是 11:00。3分钟、+3、3m、1h、1小时、一小时都是从上一段再加。单独的数字记成支出，28 是 28 元，27.8 是 27.8 元，备注里照原样留下。现在表示到此刻。回车换行，Alt+回车发送。# 搜任务。</p>
       <textarea id="loose-text" rows="5" placeholder="1100，杂，洗被子&#10;现在，说明"></textarea>
       <div class="actions">
         <button type="button" class="save" id="loose-send">发送</button>
@@ -1249,12 +1251,17 @@
     <p><kbd>1</kbd> 最高 <kbd>2</kbd> 高 <kbd>3</kbd> 中 <kbd>4</kbd> 低 <kbd>5</kbd> 最低 <kbd>0</kbd> 无</p>
     <p><kbd>x</kbd> 完成 <kbd>a</kbd> 归档 <kbd>[</kbd> 上移 <kbd>]</kbd> 下移</p>
     <p>
+      <button type="button" class="quick-mark" data-status="待做">待做</button>
+      <button type="button" class="quick-mark" data-status="进行中">进行中</button>
+      <button type="button" class="quick-mark" data-status="完成">完成</button>
+    </p>
+    <p>
       <button type="button" class="quick-mark" data-mark-key="#"># 标签</button>
       <button type="button" class="quick-mark" data-mark-key="@">@ 场景</button>
       <button type="button" class="quick-mark" data-mark-key="+">+ 项目</button>
     </p>
     <p><kbd>←</kbd> 上级</p>
-    <p>子项目里 <kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 上下移动。详情里 <kbd>Alt</kbd>+<kbd>1</kbd> 起进入子项目</p>
+    <p>详情里 <kbd>↑</kbd><kbd>↓</kbd> 定位子项目，不分层级。<kbd>d</kbd> 快捷，再按 <kbd>d</kbd> 补信息</p>
     <p class="quiet">Esc 取消</p>
   </div>
   <div id="child-add" hidden>
@@ -1443,14 +1450,17 @@
     function liftPinned(tasks) {
       const pins = readPins();
       if (!pins.length || !tasks || !tasks.length) return tasks || [];
+      const flat = filters.level === "flat";
       const blocks = [];
       for (let i = 0; i < tasks.length; i += 1) {
         const task = tasks[i];
         const block = [task];
-        const base = task.indent || 0;
-        while (i + 1 < tasks.length && tasks[i + 1].file === task.file && (tasks[i + 1].indent || 0) > base) {
-          i += 1;
-          block.push(tasks[i]);
+        if (!flat) {
+          const base = task.indent || 0;
+          while (i + 1 < tasks.length && tasks[i + 1].file === task.file && (tasks[i + 1].indent || 0) > base) {
+            i += 1;
+            block.push(tasks[i]);
+          }
         }
         blocks.push(block);
       }
@@ -1658,6 +1668,47 @@
       return allRows().filter((task) => keys.has(keyOf(task)));
     }
 
+    function copyTextOfSelection() {
+      const keys = selected.size ? selected : new Set(current ? [current] : []);
+      if (!keys.size) return "";
+      const seen = new Set();
+      const rows = [];
+      function take(task) {
+        const key = keyOf(task);
+        if (!keys.has(key) || seen.has(key)) return;
+        seen.add(key);
+        rows.push(task);
+      }
+      visible.forEach(take);
+      allRows().forEach(take);
+      return rows.map((task) => task.title).filter(Boolean).join("\n");
+    }
+
+    function copySelection() {
+      const picked = window.getSelection();
+      if (picked && !picked.isCollapsed && String(picked).trim()) return false;
+      const text = copyTextOfSelection();
+      if (!text) return false;
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.left = "0";
+      area.style.top = "0";
+      area.style.opacity = "0";
+      document.body.append(area);
+      area.focus();
+      area.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch (error) { ok = false; }
+      area.remove();
+      if (ok) showNotice("已复制");
+      else if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showNotice("已复制")).catch(() => showError("没复制上"));
+      } else showError("没复制上");
+      return true;
+    }
+
     function slim(task) {
       return { file: task.file, line: task.line, raw: task.raw };
     }
@@ -1670,6 +1721,16 @@
         kids.push(visible[i]);
       }
       return kids;
+    }
+
+    let lastTitleClick = { key: "", at: 0 };
+
+    function selectNodeText(node) {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
     }
 
     function taskRow(task, track, opts) {
@@ -1745,6 +1806,16 @@
       row.append(body, side);
       row.addEventListener("click", (event) => {
         if (event.target.closest("input, button")) return;
+        const title = event.target.closest(".title");
+        const now = Date.now();
+        if (title && lastTitleClick.key === key && now - lastTitleClick.at < 400) {
+          lastTitleClick = { key: "", at: 0 };
+          selectNodeText(title);
+          return;
+        }
+        const picked = window.getSelection();
+        if (picked && !picked.isCollapsed && row.contains(picked.anchorNode)) return;
+        if (title) lastTitleClick = { key, at: now };
         selectTask(task, event);
       });
       row.addEventListener("contextmenu", (event) => {
@@ -2424,7 +2495,7 @@
         detailEl.append(back);
       }
       const subLabel = document.createElement("h3");
-      const family = familyOf(task);
+      const family = familyOf(task).filter((row) => filters.showDone || !row.done);
       const directCount = family.filter((row) => (row.indent || 0) === (task.indent || 0) + 1).length;
       subLabel.textContent = directCount ? directCount + " 个子项目" : "子项目";
       const subList = document.createElement("div");
@@ -2446,6 +2517,8 @@
         name.textContent = child.title;
         let clickTimer = 0;
         name.addEventListener("click", () => {
+          const picked = window.getSelection();
+          if (picked && !picked.isCollapsed) return;
           clearTimeout(clickTimer);
           clickTimer = setTimeout(() => {
             focusSide("detail");
@@ -2744,28 +2817,48 @@
     let finishMask = null;
     let finishButton = null;
 
-    function popResult(message, ok) {
+    function popResult(message, ok, selector) {
       if (!document.documentElement.classList.contains("pop")) return false;
-      const mask = document.querySelector("#loose-mask");
-      if (mask) mask.hidden = false;
-      const heading = document.querySelector("#loose-mask h2");
-      if (heading) heading.textContent = ok ? "已记下" : "没记上";
-      const hint = document.querySelector("#loose-mask .hot-hint");
+      const mask = document.querySelector(selector || "#loose-mask");
+      if (!mask) return false;
+      mask.hidden = false;
+      const heading = mask.querySelector("h2");
+      const creating = selector === "#create-mask";
+      if (!ok) {
+        if (heading) heading.textContent = creating ? "没创建" : "没记上";
+        const hint = mask.querySelector(".hot-hint");
+        if (hint) {
+          hint.textContent = message || "";
+          hint.style.color = "#8a3b24";
+          hint.style.fontSize = "15px";
+        }
+        mask.querySelectorAll("textarea, button.save").forEach((item) => { item.disabled = false; });
+        const box = mask.querySelector("textarea");
+        if (box) box.focus();
+        return true;
+      }
+      if (heading) heading.textContent = creating ? "已创建" : "已记下";
+      const hint = mask.querySelector(".hot-hint");
       if (hint) {
-        hint.textContent = message;
-        hint.style.color = ok ? "#1f7a4d" : "#8a3b24";
+        hint.textContent = message || "";
+        hint.style.color = "#1f7a4d";
         hint.style.fontSize = "15px";
       }
-      const box = document.querySelector("#loose-text");
-      if (box) box.disabled = true;
-      const send = document.querySelector("#loose-send");
-      if (send) send.disabled = true;
+      mask.querySelectorAll("textarea, button.save").forEach((item) => { item.disabled = true; });
+      if (!creating) {
+        localStorage.removeItem("work-plan-loose-draft");
+        fetch("/api/loose-draft", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: "" }),
+        }).catch(() => {});
+      }
       setTimeout(() => {
         window.close();
         fetch("/api/close-pop", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: "{}",
+          body: JSON.stringify({ title: creating ? "创建" : "自由" }),
         }).catch(() => {});
       }, ok ? 900 : 1800);
       return true;
@@ -2797,15 +2890,31 @@
           openCategoryMenu(body.categories || []);
           return;
         }
-        if (payload.complete && payload.item) {
-          const done = await fetch("/api/form", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ items: [payload.item], status: "完成" }),
-          });
-          const doneBody = await done.json();
-          if (!done.ok) throw new Error(doneBody.error || "记上了，任务没勾掉");
-          await load();
+        if (payload.complete && (payload.item || (payload.items && payload.items.length))) {
+          let items = (payload.items && payload.items.length ? payload.items : [payload.item]).map((item) => Object.assign({}, item));
+          let marked = false;
+          for (let attempt = 0; attempt < 2 && !marked; attempt += 1) {
+            const done = await fetch("/api/form", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ items, status: "完成" }),
+            });
+            const doneBody = await done.json();
+            if (done.ok) {
+              marked = true;
+              await load();
+              break;
+            }
+            if (attempt === 0 && /已经变了/.test(doneBody.error || "")) {
+              await load();
+              items = items.map((item) => {
+                const found = allRows().find((row) => row.file === item.file && row.title === item.title) || allRows().find((row) => row.file === item.file && row.line === item.line);
+                return found ? Object.assign(slim(found), { title: found.title }) : item;
+              });
+              continue;
+            }
+            throw new Error(doneBody.error || "记上了，任务没勾掉");
+          }
         }
         finishPayload = null;
         if (payload.started) writeFocus(null);
@@ -2839,7 +2948,7 @@
         hints: document.querySelector("#edit-extra").value,
         category_id: categoryId,
         complete: complete === true && !task.done,
-        item: slim(task),
+        item: Object.assign(slim(task), { title: task.title }),
         started: sameFocus(task, current) ? current.started : "",
       }, document.querySelector("#edit-mask"), [
         document.querySelector("#edit-pause"),
@@ -2925,18 +3034,33 @@
 
     function openLoose() {
       const box = document.querySelector("#loose-text");
-      box.value = "";
+      const local = localStorage.getItem("work-plan-loose-draft") || "";
+      box.value = local;
       document.querySelector("#loose-mask").hidden = false;
-      box.focus();
+      if (!local.trim()) {
+        fetch("/api/loose-draft").then((response) => response.json()).then((body) => {
+          if (body.text && !box.value.trim()) {
+            box.value = body.text;
+            localStorage.setItem("work-plan-loose-draft", body.text);
+          }
+          box.focus();
+        }).catch(() => box.focus());
+      } else box.focus();
     }
 
     async function sendLoose() {
       const text = document.querySelector("#loose-text").value.trim();
       if (!text) return;
+      localStorage.setItem("work-plan-loose-draft", document.querySelector("#loose-text").value);
+      fetch("/api/loose-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: document.querySelector("#loose-text").value }),
+      }).catch(() => {});
       const flushed = await flushFocus();
       if (!flushed.ok) return;
       const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
-      const timed = lines.length && lines.every((line) => /^(?:现在|now|\d{3,4}|\d{1,2}\s*[:：]\s*\d{2})(?:\s*[，,]|$)/i.test(line));
+      const timed = lines.length && lines.every((line) => /^(?:现在|now|\d{3,4}|\d{1,2}\s*[:：]\s*\d{2}|[+＋]\s*(?:\d+|[零〇一二两三四五六七八九十]+)(?:\s*(?:个)?(?:分钟|分|min|m|小时|钟头|h))?|(?:\d+|[零〇一二两三四五六七八九十]+)\s*(?:个)?(?:分钟|分|min|m|小时|钟头|h))(?:\s*[，,]|$)/i.test(line));
       await postFinish(timed ? {
         segments: text,
         complete: false,
@@ -3031,6 +3155,7 @@
       if (index < 0) index = order.indexOf("list");
       const next = index + step;
       if (next < 0 || next >= order.length) return;
+      if (order[next] === "detail" && current) detailAnchor = current;
       focusSide(order[next]);
     }
 
@@ -3045,20 +3170,21 @@
       applyLayout();
     }
 
-    async function reorderCurrent(step) {
-      const task = currentTask();
-      if (!task || !parentOf(task)) {
-        moveDetail(step);
-        return;
-      }
-      const body = await postJson("/api/reorder", { file: task.file, line: task.line, raw: task.raw, delta: step }, true);
-      if (!body || !body.line) return;
-      const fresh = allRows().find((row) => row.file === task.file && row.line === body.line);
-      if (!fresh) return;
-      current = keyOf(fresh);
+    function locateDetail(step) {
+      const root = detailRoot();
+      if (!root) return;
+      const stops = [root, ...familyOf(root).filter((row) => filters.showDone || !row.done)];
+      let index = stops.findIndex((row) => keyOf(row) === current);
+      if (index < 0) index = 0;
+      index = Math.max(0, Math.min(stops.length - 1, index + step));
+      const next = stops[index];
+      current = keyOf(next);
       selected = new Set([current]);
       anchor = current;
+      if (!detailAnchor) detailAnchor = keyOf(root);
       render();
+      const marked = document.querySelector("#detail .subtask.on");
+      if (marked) marked.scrollIntoView({ block: "nearest" });
     }
 
     function moveDetail(step) {
@@ -3081,6 +3207,7 @@
     function selectTask(task, event) {
       focusSide("list");
       const key = keyOf(task);
+      const same = !event.shiftKey && !event.ctrlKey && !event.metaKey && current === key && selected.size === 1 && selected.has(key);
       if (event.shiftKey && anchor) {
         const a = visible.findIndex((row) => keyOf(row) === anchor);
         const b = visible.findIndex((row) => keyOf(row) === key);
@@ -3099,6 +3226,7 @@
       current = key;
       detailAnchor = key;
       if (!event.shiftKey && !event.ctrlKey && !event.metaKey) rememberTask(task);
+      if (same) return;
       render();
     }
 
@@ -3708,6 +3836,14 @@
 
     const quickEl = document.querySelector("#quick");
     quickEl.addEventListener("click", (event) => {
+      const status = event.target.closest("[data-status]");
+      if (status) {
+        const items = targets();
+        if (!items.length) return;
+        hideQuick();
+        postJson("/api/form", { items: items.map(slim), status: status.dataset.status }, true);
+        return;
+      }
       const button = event.target.closest("[data-mark-key]");
       if (!button) return;
       const kind = markKind(button.dataset.markKey);
@@ -3726,7 +3862,7 @@
     function placeQuick() {
       if (!quickOn) return;
       quickEl.hidden = false;
-      const row = viewEl.querySelector(".task.current");
+      const row = document.querySelector("#detail .subtask.on") || viewEl.querySelector(".task.current");
       if (!row) {
         quickEl.style.left = Math.max(12, (window.innerWidth - quickEl.offsetWidth) / 2) + "px";
         quickEl.style.top = "96px";
@@ -4057,6 +4193,16 @@
 
     document.querySelectorAll(".key-capture").forEach((input) => input.addEventListener("keydown", captureKey));
 
+    document.addEventListener("dblclick", (event) => {
+      const field = event.target.closest("input, textarea");
+      if (!field) return;
+      const skip = ["checkbox", "radio", "button", "file", "range", "color", "hidden"];
+      if (skip.includes(field.type)) return;
+      event.preventDefault();
+      field.focus();
+      field.select();
+    });
+
     document.addEventListener("keydown", (event) => {
       if (event.target && event.target.classList && event.target.classList.contains("key-capture")) return;
       if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && /^[1-9]$/.test(event.key)) {
@@ -4175,6 +4321,16 @@
         render();
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "c" && data) {
+        const el = document.activeElement;
+        const field = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+        const detailTitle = field && el.classList.contains("detail-title");
+        const ranged = field && el.selectionStart !== el.selectionEnd;
+        if (!(field && !detailTitle) && !ranged && copySelection()) {
+          event.preventDefault();
+          return;
+        }
+      }
       if (typing() || !data) return;
       if (event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
         event.preventDefault();
@@ -4192,8 +4348,7 @@
       if (side === "detail" && vertical) {
         event.preventDefault();
         const down = hit(event, "siblingDown") || hit(event, "listDown") || hit(event, "listDown2");
-        if (hit(event, "siblingDown") || hit(event, "siblingUp")) moveDetail(down ? 1 : -1);
-        else reorderCurrent(down ? 1 : -1);
+        locateDetail(down ? 1 : -1);
         return;
       }
       if (hit(event, "siblingDown") || hit(event, "siblingUp")) {
@@ -4690,6 +4845,15 @@
       if (!title || !data.primary) return;
       const file = data.primary;
       const body = await postJson("/api/add", { file, text: title }, true);
+      if (document.documentElement.classList.contains("pop")) {
+        if (!body) {
+          const err = document.querySelector("#err .err span");
+          popResult(err ? err.textContent : "没创建", false, "#create-mask");
+          return;
+        }
+        popResult("已创建", true, "#create-mask");
+        return;
+      }
       if (!body) return;
       textInput.value = "";
       document.querySelector("#create-text").value = "";
@@ -4987,8 +5151,22 @@
     looseText.addEventListener("beforeinput", (event) => {
       if (looseHash(event)) openTaskSearch(event);
     });
+    function rememberLoose() {
+      const text = looseText.value;
+      localStorage.setItem("work-plan-loose-draft", text);
+      clearTimeout(rememberLoose.timer);
+      rememberLoose.timer = setTimeout(() => {
+        fetch("/api/loose-draft", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        }).catch(() => {});
+      }, 300);
+    }
+
     looseText.addEventListener("input", () => {
       if (/[#＃]/.test(looseText.value)) openTaskSearch();
+      rememberLoose();
     });
     looseMask.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
@@ -5109,6 +5287,9 @@
       settingsEl.hidden = false;
       showSettingsNote("");
       document.querySelector("#keywords").value = (data.name_keywords || []).join("\n");
+      const types = data.note_types || ["md"];
+      document.querySelector("#type-md").checked = types.includes("md");
+      document.querySelector("#type-txt").checked = types.includes("txt");
       document.querySelector("#vault").value = data.root || "";
       const browser = data.browser || "edge";
       if (browser === "edge" || browser === "chrome" || browser === "default") {
@@ -5174,6 +5355,7 @@
     document.querySelector("#save-settings").addEventListener("click", async () => {
       const saved = await postJson("/api/settings", {
         name_keywords: document.querySelector("#keywords").value,
+        note_types: ["md", "txt"].filter((item) => document.querySelector("#type-" + item).checked),
         vault: document.querySelector("#vault").value,
         browser: document.querySelector("#browser-path").value.trim() || document.querySelector("#browser").value,
         global_hotkey: document.querySelector("#hotkey").value,

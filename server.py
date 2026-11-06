@@ -16,6 +16,7 @@ PORT = 8876
 HERE = Path(__file__).resolve().parent
 SETTINGS = HERE / "settings.json"
 TIMEBOOK = HERE / "timebook.local.json"
+LOOSE_DRAFT = HERE / "loose-draft.json"
 DEFAULT_VAULT = r"E:\my_note\03工作"
 PLAN_WORDS = ("接下来", "工作规划", "本周工作", "日计划", "周计划")
 TASK_RE = re.compile(r"^([\t ]*)- \[([ xX/\-!>~*?#])\](.*)$")
@@ -137,12 +138,28 @@ def archive_file() -> Path:
     return root.parent / "TaskForge-Archive.md"
 
 
+def note_suffixes() -> set[str]:
+    raw = read_settings().get("note_types")
+    allowed = {"md", "txt"}
+    if not isinstance(raw, list) or not raw:
+        return {".md"}
+    found = set()
+    for item in raw:
+        text = str(item or "").strip().lower().lstrip(".")
+        if text in allowed:
+            found.add("." + text)
+    return found or {".md"}
+
+
 def note_files():
     root = vault_root()
     if root is None or not root.is_dir():
         return
+    wanted = note_suffixes()
+    found = []
     try:
-        found = list(root.rglob("*.md"))
+        for suffix in wanted:
+            found.extend(path for path in root.rglob("*" + suffix) if path.is_file())
     except OSError:
         return
     for path in found:
@@ -450,6 +467,22 @@ def save_settings(data: dict) -> dict:
         if text not in ("edge", "chrome", "default") and Path(text).suffix.lower() != ".exe":
             raise ValueError("浏览器选 Edge、Chrome、系统默认，或填写 exe 路径")
         current["browser"] = text
+    if "note_types" in data:
+        raw = data.get("note_types")
+        if isinstance(raw, str):
+            parts = re.split(r"[\s,，]+", raw)
+        elif isinstance(raw, list):
+            parts = [str(item) for item in raw]
+        else:
+            parts = []
+        types = []
+        for part in parts:
+            text = part.strip().lower().lstrip(".")
+            if text in ("md", "txt") and text not in types:
+                types.append(text)
+        if not types:
+            raise ValueError("至少留一种文件：md 或 txt")
+        current["note_types"] = types
     save_local_timebook(data)
     previous = read_settings()
     write_settings(current)
@@ -552,8 +585,8 @@ def resolve_md(rel: str) -> Path:
     path = (root / rel).resolve()
     if path != root and root not in path.parents:
         raise ValueError("outside vault")
-    if path.suffix.lower() != ".md" or not path.is_file():
-        raise ValueError("not a note")
+    if path.suffix.lower() not in note_suffixes() or not path.is_file():
+        raise ValueError("不是能写的笔记")
     if "TaskForge" in path.parts:
         raise ValueError("skipped")
     return path
@@ -1054,6 +1087,7 @@ def collect() -> dict:
         "plans": sections,
         "other": other,
         "name_keywords": words,
+        "note_types": sorted(item.lstrip(".") for item in note_suffixes()),
         "global_hotkey": global_hotkey(),
         "global_show": show_hotkey(),
         "global_loose": loose_hotkey(),
@@ -2019,6 +2053,25 @@ def timebook_now() -> datetime:
     return datetime.strptime(found.group(1) + " " + found.group(2), "%Y-%m-%d %H:%M")
 
 
+def read_loose_draft() -> str:
+    try:
+        saved = json.loads(LOOSE_DRAFT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(saved.get("text") or "") if isinstance(saved, dict) else ""
+
+
+def write_loose_draft(text: str) -> None:
+    text = text or ""
+    if not text.strip():
+        try:
+            LOOSE_DRAFT.unlink()
+        except OSError:
+            pass
+        return
+    LOOSE_DRAFT.write_text(json.dumps({"text": text}, ensure_ascii=False), encoding="utf-8")
+
+
 def read_local_timebook() -> dict:
     try:
         saved = json.loads(TIMEBOOK.read_text(encoding="utf-8"))
@@ -2094,6 +2147,18 @@ def mentioned(text: str, name: str) -> bool:
     return name.lower() in text.lower()
 
 
+def remark_keywords(remark: str) -> list[str]:
+    found = re.search(r"判断关键词[:：]\s*(.+?)(?:\n\s*\n|\n不包括|\n核心判断|$)", remark or "", re.S)
+    if not found:
+        return []
+    words = []
+    for part in re.split(r"[、，,\n；;]", found.group(1)):
+        word = part.strip().strip("。.")
+        if len(word) >= 2 and word not in words:
+            words.append(word)
+    return words
+
+
 def flatten_categories(nodes: list) -> list[dict]:
     rows = []
 
@@ -2107,7 +2172,12 @@ def flatten_categories(nodes: list) -> list[dict]:
             if children:
                 walk(children, label)
             elif node.get("id"):
-                rows.append({"id": int(node["id"]), "name": label, "leaf": name})
+                rows.append({
+                    "id": int(node["id"]),
+                    "name": label,
+                    "leaf": name,
+                    "keywords": remark_keywords(str(node.get("remark") or "")),
+                })
 
     walk(nodes, "")
     return rows
@@ -2267,7 +2337,7 @@ def finish_local_segments(text: str) -> dict:
     block = []
     summaries = []
     for parts in rows:
-        end = parse_mark(parts[0], now, now)
+        end = parse_mark(parts[0], now, now, cursor)
         if len(parts) >= 3:
             category, desc = parts[1], note_after_category(parts[1], parts[2])
         elif len(parts) == 2:
@@ -2304,7 +2374,9 @@ def load_catalog(call, refresh: bool = False) -> dict:
     if not refresh:
         try:
             cached = json.loads(path.read_text(encoding="utf-8"))
-            if cached.get("date") == today and cached.get("categories") and cached.get("options"):
+            rows = cached.get("categories") or []
+            ready = rows and isinstance(rows[0], dict) and "keywords" in rows[0]
+            if cached.get("date") == today and ready and cached.get("options"):
                 return cached
         except (OSError, json.JSONDecodeError):
             pass
@@ -2453,7 +2525,7 @@ def finish_timebook(title: str, category_id, note: str = "", hints: str = "", st
     lead_item = match_leaf(lead.group(1), categories) if lead else None
     chosen_item = lock_category(hints or "", categories) or lock_category(blob, categories) or lead_item
     if not chosen_item:
-        chosen_item = ask_deepseek(blob, categories) or leaf_hit(blob, categories) or work_category(categories)
+        chosen_item = keyword_hit(blob, categories) or ask_deepseek(blob, categories) or leaf_hit(blob, categories) or work_category(categories)
     chosen = chosen_item["id"] if chosen_item else (category_id or timebook_config().get("category_id"))
     if not chosen:
         return {"need_category": True, "categories": [{"id": item["id"], "name": item["name"]} for item in categories]}
@@ -2561,6 +2633,54 @@ def finish_timebook(title: str, category_id, note: str = "", hints: str = "", st
 
 
 TIME_HEAD = re.compile(r"^(?:现在|now|\d{1,2}\s*[:：]\s*\d{2}|\d{3,4})$", re.I)
+CN_DIGIT = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def cn_amount(text: str) -> int | None:
+    if text.isdigit():
+        return int(text)
+    if not text or any(ch not in CN_DIGIT and ch != "十" for ch in text):
+        return None
+    if "十" not in text:
+        return CN_DIGIT[text] if len(text) == 1 else None
+    left, right = text.split("十", 1)
+    if "十" in right or (left and left not in CN_DIGIT) or (right and right not in CN_DIGIT):
+        return None
+    tens = CN_DIGIT[left] if left else 1
+    ones = CN_DIGIT[right] if right else 0
+    return tens * 10 + ones
+
+
+def added_minutes(token: str) -> int | None:
+    found = re.fullmatch(
+        r"(\+|＋)?\s*(\d+|[零〇一二两三四五六七八九十]+)\s*(?:个)?(分钟|分|min|m|小时|钟头|h)?",
+        (token or "").strip(),
+        re.I,
+    )
+    if not found:
+        return None
+    plus, raw, unit = found.group(1), found.group(2), found.group(3) or ""
+    if not plus and not unit:
+        return None
+    amount = int(raw) if raw.isdigit() else cn_amount(raw)
+    if amount is None:
+        return None
+    if amount <= 0:
+        raise ValueError("时间不对：" + token.strip())
+    if unit.lower() in ("h", "小时", "钟头"):
+        amount *= 60
+    if amount > 24 * 60:
+        raise ValueError("时间不对：" + token.strip())
+    return amount
+
+
+def is_time_head(token: str) -> bool:
+    try:
+        if added_minutes(token) is not None:
+            return True
+    except ValueError:
+        return True
+    return TIME_HEAD.match((token or "").strip()) is not None
 
 
 def clock_parts(token: str) -> tuple[int, int] | None:
@@ -2609,16 +2729,24 @@ def segment_lines(text: str) -> list[list[str]] | None:
     for line in lines:
         parts = [part.strip() for part in re.split(r"[，,]", line, maxsplit=2)]
         parts = [part for part in parts if part]
-        if not parts or not TIME_HEAD.match(parts[0]):
+        if not parts or not is_time_head(parts[0]):
             return None
         rows.append(parts)
     return rows
 
 
-def parse_mark(token: str, day: datetime, now: datetime) -> datetime:
+def parse_mark(token: str, day: datetime, now: datetime, cursor: datetime | None = None) -> datetime:
     token = token.strip()
     if token.lower() in ("现在", "now"):
         return now.replace(second=0, microsecond=0)
+    extra = added_minutes(token)
+    if extra is not None:
+        if cursor is None:
+            raise ValueError("还没有上一段时间")
+        stamp = cursor + timedelta(minutes=extra)
+        if stamp > now:
+            raise ValueError(token + " 超过现在了")
+        return stamp
     found = clock_parts(token)
     if not found:
         raise ValueError("认不出时间：" + token)
@@ -2629,6 +2757,56 @@ def parse_mark(token: str, day: datetime, now: datetime) -> datetime:
     if stamp > now:
         raise ValueError(token + " 还没到")
     return stamp
+
+
+def only_category(word: str, items: list[dict]) -> dict | None:
+    found = []
+    seen = set()
+    for item in items:
+        ident = item.get("id")
+        if ident in seen:
+            continue
+        seen.add(ident)
+        found.append(item)
+    if not found:
+        return None
+    if len(found) == 1:
+        return found[0]
+    names = "、".join(str(item.get("name") or "") for item in found)
+    raise ValueError("没有对上分类：" + word + "，可能是" + names)
+
+
+def keyword_exact(word: str, categories: list[dict]) -> list[dict]:
+    folded = word.casefold()
+    hits = []
+    for item in categories:
+        for token in item.get("keywords") or []:
+            if str(token).strip().casefold() == folded:
+                hits.append(item)
+                break
+    return hits
+
+
+def keyword_hit(text: str, categories: list[dict]) -> dict | None:
+    folded = (text or "").casefold()
+    if not folded:
+        return None
+    best = 0
+    hits = []
+    for item in categories:
+        for token in item.get("keywords") or []:
+            word = str(token).strip()
+            if len(word) < 2 or word.casefold() not in folded:
+                continue
+            if len(word) > best:
+                hits = [item]
+                best = len(word)
+            elif len(word) == best:
+                hits.append(item)
+    try:
+        return only_category("", hits)
+    except ValueError:
+        return None
 
 
 def match_leaf(word: str, categories: list[dict]) -> dict | None:
@@ -2650,6 +2828,22 @@ def match_leaf(word: str, categories: list[dict]) -> dict | None:
     if tails:
         tails.sort(key=lambda item: (-len(str(item.get("leaf") or "")), 0 if str(item.get("name") or "").startswith("事业") else 1))
         return tails[0]
+    keyed = keyword_exact(word, categories)
+    if keyed:
+        return only_category(word, keyed)
+    if len(word) >= 2:
+        contained = [item for item in categories if word in str(item.get("leaf") or "")]
+        if contained:
+            return only_category(word, contained)
+        folded = word.casefold()
+        partial = []
+        for item in categories:
+            for token in item.get("keywords") or []:
+                if folded in str(token).casefold():
+                    partial.append(item)
+                    break
+        if partial:
+            return only_category(word, partial)
     prefix = [item for item in categories if str(item.get("leaf") or "").startswith(word)]
     prefix.sort(key=lambda item: (len(item.get("leaf") or ""), 0 if str(item.get("name") or "").startswith("事业") else 1))
     return prefix[0] if prefix else None
@@ -2776,9 +2970,9 @@ def finish_segments(text: str) -> dict:
     if not last_end or last_end >= now:
         raise ValueError("今天还没有上一条记录，先在时间书里有一段之后再记")
     cursor = last_end
-    summaries = []
+    planned = []
     for parts in rows:
-        end = parse_mark(parts[0], now, now)
+        end = parse_mark(parts[0], now, now, cursor)
         if len(parts) >= 3:
             category_word, desc = parts[1], note_after_category(parts[1], parts[2])
         elif len(parts) == 2:
@@ -2797,7 +2991,7 @@ def finish_segments(text: str) -> dict:
             if not chosen_item:
                 raise ValueError("没有对上分类：" + category_word)
         else:
-            chosen_item = lock_category(blob, categories) or ask_deepseek(blob, categories) or leaf_hit(blob, categories) or work_category(categories)
+            chosen_item = keyword_hit(blob, categories) or lock_category(blob, categories) or ask_deepseek(blob, categories) or leaf_hit(blob, categories) or work_category(categories)
         if not chosen_item:
             raise ValueError("没有对上分类")
         names = attach_names(blob, options)
@@ -2814,13 +3008,16 @@ def finish_segments(text: str) -> dict:
         if peeled["income"]:
             arguments["income"] = peeled["income"]
         arguments.update(names["extra"])
-        parsed = tool_json(call("add_time_record", arguments))
-        if parsed.get("code") not in (0, None):
-            raise ValueError(parsed.get("msg") or "时间书没有收下")
+        planned.append((arguments, f"{arguments['start']}–{arguments['end']} {chosen_item.get('name') or ''}"))
         spans.append((start_dt, end_dt))
         spans.sort()
         cursor = end_dt
-        summaries.append(f"{arguments['start']}–{arguments['end']} {chosen_item.get('name') or ''}")
+    summaries = []
+    for arguments, summary in planned:
+        parsed = tool_json(call("add_time_record", arguments))
+        if parsed.get("code") not in (0, None):
+            raise ValueError(parsed.get("msg") or "时间书没有收下")
+        summaries.append(summary)
     return {"ok": True, "count": len(summaries), "summary": f"{len(summaries)} 段 · " + " · ".join(summaries)}
 
 
@@ -3099,12 +3296,12 @@ def start_pin_overlay() -> None:
     threading.Thread(target=loop, name="pin-overlay", daemon=True).start()
 
 
-def close_pop_windows() -> None:
+def close_pop_windows(only: str = "") -> None:
     import ctypes
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
-    titles = {"自由", "创建"}
+    titles = {only} if only in ("自由", "创建") else {"自由", "创建"}
 
     def visit(hwnd, _lp):
         if not user32.IsWindowVisible(hwnd):
@@ -3212,6 +3409,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/pop":
             self.send_json(200, take_pop())
             return
+        if path == "/api/loose-draft":
+            self.send_json(200, {"text": read_loose_draft()})
+            return
         if path == "/api/desk":
             self.send_json(200, {"tick": DESK["tick"], "action": DESK["action"], "locked": DESK["locked"], "hideDone": DESK["hideDone"]})
             return
@@ -3277,6 +3477,9 @@ class Handler(BaseHTTPRequestHandler):
                 result = {"path": pick_folder()}
             elif path == "/api/pin-window":
                 result = pin_main_window(bool(data.get("on")))
+            elif path == "/api/loose-draft":
+                write_loose_draft(str(data.get("text") or ""))
+                result = {"ok": True}
             elif path == "/api/desk":
                 if "locked" in data:
                     DESK["locked"] = bool(data.get("locked"))
@@ -3287,7 +3490,7 @@ class Handler(BaseHTTPRequestHandler):
                     ctypes.windll.user32.InvalidateRect(PIN_HWND, None, True)
                 result = {"tick": DESK["tick"], "action": DESK["action"], "locked": DESK["locked"], "hideDone": DESK["hideDone"]}
             elif path == "/api/close-pop":
-                close_pop_windows()
+                close_pop_windows(str(data.get("title") or ""))
                 result = {"ok": True}
             elif path == "/api/time-categories":
                 result = {"categories": timebook_categories()}

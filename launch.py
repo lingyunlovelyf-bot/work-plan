@@ -133,8 +133,8 @@ def near_center(hwnd) -> bool:
     return abs(rect.left - x) <= 24 and abs(rect.top - y) <= 24
 
 
-def remember_pop_center() -> None:
-    path = POP_PROFILE / "Default" / "Preferences"
+def remember_center(profile: Path, fallback_w: int, fallback_h: int) -> None:
+    path = profile / "Default" / "Preferences"
     try:
         saved = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -153,9 +153,9 @@ def remember_pop_center() -> None:
             width = int(node["right"]) - int(node["left"])
             height = int(node["bottom"]) - int(node["top"])
             if width < 200:
-                width = 560
+                width = fallback_w
             if height < 160:
-                height = 440
+                height = fallback_h
             x = left + max(0, (area_w - width) // 2)
             y = top + max(0, (area_h - height) // 2)
             node["left"] = x
@@ -176,6 +176,10 @@ def remember_pop_center() -> None:
     if not changed:
         return
     path.write_text(json.dumps(saved, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+
+def remember_pop_center() -> None:
+    remember_center(POP_PROFILE, 560, 440)
 
 
 def focus_hwnd(hwnd) -> None:
@@ -201,11 +205,37 @@ def place_pop() -> bool:
     hwnd = found[-1]
     center_hwnd(hwnd)
     focus_hwnd(hwnd)
+    mark = HERE / "pop-refresh"
+    if mark.exists():
+        time.sleep(0.2)
+        user32 = ctypes.windll.user32
+        user32.keybd_event(0x74, 0, 0, 0)
+        user32.keybd_event(0x74, 0, 2, 0)
+        try:
+            mark.unlink()
+        except OSError:
+            pass
     return True
 
 
+def main_window():
+    return matching_hwnds(lambda title: title == "工作计划" or title.endswith("— 工作计划") or title.endswith("- 工作计划"))
+
+
 def focus_window() -> bool:
-    return focus_matching(lambda title: title == "工作计划" or title.endswith("— 工作计划") or title.endswith("- 工作计划"))
+    found = main_window()
+    if not found:
+        return False
+    focus_hwnd(found[-1])
+    return True
+
+
+def place_main() -> None:
+    found = main_window()
+    if not found:
+        return
+    center_hwnd(found[-1])
+    focus_hwnd(found[-1])
 
 
 def open_default(url: str) -> None:
@@ -262,8 +292,19 @@ def main() -> None:
         place_pop()
         return
     if focus_window():
+        place_main()
         return
-    open_app(URL, PROFILE, "1120,780")
+    remember_center(PROFILE, 1120, 780)
+    x, y = center_of(1120, 780)
+    open_app(URL, PROFILE, "1120,780", str(x) + "," + str(y))
+    for _ in range(16):
+        time.sleep(0.12)
+        found = main_window()
+        if not found:
+            continue
+        if not near_center(found[-1]):
+            center_hwnd(found[-1])
+    place_main()
 
 
 if __name__ == "__main__":
