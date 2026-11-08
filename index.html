@@ -107,7 +107,8 @@
     #space-list button { text-align: left; padding: 6px 10px; border-radius: 8px; color: #3a3a3a; }
     #space-list button.on { background: var(--nav); color: var(--blue); }
     .space-edit { display: grid; gap: 6px; margin: 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
-    .space-edit textarea { min-height: 64px; }
+    .space-edit label { color: var(--muted); font-size: 12px; }
+    #settings .space-edit textarea { min-height: 52px; }
     .pane-btn {
       height: 28px;
       padding: 0 8px;
@@ -990,6 +991,8 @@
               </div>
             </div>
             <div class="set-row stack" id="vault-row">
+              <div>
+                <strong>笔记文件夹</strong>
                 <p>选一个文件夹。文件名里带下面这些词的笔记才会收进来。换完保存，马上按新的读。</p>
               </div>
               <div class="vault-line">
@@ -5596,8 +5599,12 @@
         const words = document.createElement("textarea");
         words.className = "space-words";
         words.value = Array.isArray(space.keywords) ? space.keywords.join("\n") : (space.keywords || "");
-        words.placeholder = "关键词，一行一个";
-        row.append(name, path, words);
+        words.placeholder = "一行一个";
+        [["名字", name], ["路径", path], ["关键词", words]].forEach(([text, field]) => {
+          const label = document.createElement("label");
+          label.textContent = text;
+          row.append(label, field);
+        });
         if (space.id !== "work" && space.id !== "life") {
           const remove = document.createElement("button");
           remove.type = "button";
