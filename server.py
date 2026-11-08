@@ -173,56 +173,51 @@ def spaces() -> list[dict]:
         rows = []
     if not rows:
         root = vault_root()
-        if root is not None:
-            work_path = str(root)
-            life_path = str(root.parent / "05家庭")
-        else:
-            work_path = "03工作"
-            life_path = "05家庭"
         rows = [
-            {"id": "work", "name": "工作", "path": work_path, "keywords": name_keywords()},
-            {"id": "life", "name": "生活", "path": life_path, "keywords": ["生活"]},
+            {"id": "work", "name": "工作", "path": root.name if root is not None else "03工作", "keywords": name_keywords()},
+            {"id": "life", "name": "生活", "path": "05家庭", "keywords": ["生活"]},
         ]
     for row in rows:
-        row["path"] = full_space_path(row["path"])
+        row["path"] = space_rel(row["path"])
     return rows
 
 
-def full_space_path(path: str) -> str:
-    raw = str(path or "").strip().strip('"')
+def space_rel(path: str) -> str:
+    raw = str(path or "").strip().strip('"').replace("\\", "/").strip("/")
     if not raw:
         return raw
+    drive = len(raw) >= 2 and raw[1] == ":"
     candidate = Path(raw)
-    if candidate.is_absolute():
-        return str(candidate)
-    root = vault_root()
-    if root is None:
+    if not drive and not candidate.is_absolute():
         return raw
-    if candidate.name == root.name and len(candidate.parts) == 1:
-        return str(root)
-    return str(root.parent / candidate)
+    root = vault_root()
+    if root is not None:
+        try:
+            return candidate.resolve().relative_to(root.parent.resolve()).as_posix()
+        except (OSError, ValueError):
+            pass
+    return candidate.name
 
 
 def space_prefix(space: dict) -> str:
-    raw = str(space.get("path") or "").replace("\\", "/").strip("/")
-    if len(raw) >= 2 and raw[1] == ":":
-        return Path(raw).name
-    return raw
+    return space_rel(str(space.get("path") or ""))
 
 
 def space_dir(space: dict) -> Path | None:
-    raw = str(space.get("path") or "").strip()
-    if not raw:
+    prefix = space_prefix(space)
+    if not prefix:
         return None
-    path = Path(raw)
-    if path.is_absolute():
-        return path
     root = vault_root()
     if root is None:
         return None
-    if root.name == space_prefix(space):
-        return root
-    return root.parent / space_prefix(space)
+    parts = [part for part in prefix.split("/") if part]
+    if parts[0] == root.name:
+        return root.joinpath(*parts[1:]) if len(parts) > 1 else root
+    inside = root.joinpath(*parts)
+    beside = root.parent.joinpath(*parts)
+    if inside.is_dir():
+        return inside
+    return beside
 
 
 def file_in_space(rel: str, name: str, space: dict) -> bool:
@@ -3621,10 +3616,22 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_error(self, code, message=None, explain=None):
+        path = urlparse(getattr(self, "path", "")).path
+        if path.startswith("/api/"):
+            self.send_json(int(code), {"error": message or explain or "没有这个接口"})
+            return
+        super().send_error(code, message, explain)
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/api/tasks":
-            self.send_json(200, collect())
+            try:
+                payload = collect()
+            except Exception as exc:
+                self.send_json(500, {"error": str(exc) or "没读到任务"})
+                return
+            self.send_json(200, payload)
             return
         if path == "/api/signal":
             self.send_json(200, take_signal())
