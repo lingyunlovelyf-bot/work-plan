@@ -1279,6 +1279,16 @@
     <textarea id="child-text" rows="3" placeholder="回车再加一条，Tab 缩进是子任务。行尾可写 t m 1 #。Ctrl+回车添加"></textarea>
   </div>
   <script>
+    if (!Element.prototype.replaceChildren) {
+      Element.prototype.replaceChildren = function () {
+        while (this.firstChild) this.removeChild(this.firstChild);
+        for (let i = 0; i < arguments.length; i += 1) {
+          const node = arguments[i];
+          if (node == null) continue;
+          this.appendChild(node.nodeType ? node : document.createTextNode(String(node)));
+        }
+      };
+    }
     let data = null;
     let view = "today";
     let cal = null;
