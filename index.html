@@ -818,6 +818,7 @@
       border-top: 1px solid var(--line);
     }
     .set-row.stack { grid-template-columns: 1fr; }
+    #vault-row[hidden] { display: none; }
     .set-row.stack input + input { margin-top: 8px; }
     .vault-line { display: flex; gap: 8px; }
     .vault-line input { flex: 1; min-width: 0; }
@@ -988,9 +989,7 @@
                 <span class="set-test-result" id="fns-test-result"></span>
               </div>
             </div>
-            <div class="set-row stack">
-              <div>
-                <strong>笔记文件夹</strong>
+            <div class="set-row stack" id="vault-row">
                 <p>选一个文件夹。文件名里带下面这些词的笔记才会收进来。换完保存，马上按新的读。</p>
               </div>
               <div class="vault-line">
@@ -1015,7 +1014,7 @@
             <div class="set-row stack">
               <div>
                 <strong>空间</strong>
-                <p>每个空间写自己的文件夹完整路径。工作是 E:\my_note\03工作，生活是 E:\my_note\05家庭。上面的笔记文件夹是没开同步时用的那一个。文件名里要有关键词才会收进来。</p>
+                <p>每个空间写自己的文件夹完整路径。工作是 E:\my_note\03工作，生活是 E:\my_note\05家庭。开了同步就按这些路径读。文件名里要有关键词才会收进来。</p>
               </div>
               <div id="space-editor"></div>
               <button type="button" class="set-test" id="add-space">新增空间</button>
@@ -5457,6 +5456,7 @@
       document.querySelector("#type-md").checked = types.includes("md");
       document.querySelector("#type-txt").checked = types.includes("txt");
       document.querySelector("#vault").value = data.root || "";
+      document.querySelector("#vault-row").hidden = !!data.fns_on;
       const browser = data.browser || "edge";
       if (browser === "edge" || browser === "chrome" || browser === "default") {
         document.querySelector("#browser").value = browser;
