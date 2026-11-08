@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import fns
+
 HOST = "127.0.0.1"
 PORT = 8876
 HERE = Path(__file__).resolve().parent
@@ -151,8 +153,14 @@ def note_suffixes() -> set[str]:
     return found or {".md"}
 
 
+def task_root() -> Path | None:
+    if fns.enabled():
+        return fns.mirror()
+    return vault_root()
+
+
 def note_files():
-    root = vault_root()
+    root = task_root()
     if root is None or not root.is_dir():
         return
     wanted = note_suffixes()
@@ -382,7 +390,7 @@ def vault_rev() -> str:
             stat = path.stat()
         except OSError:
             continue
-        root = vault_root()
+        root = task_root()
         rel = path.relative_to(root).as_posix()
         parts.append(f"{rel}:{stat.st_mtime_ns}:{stat.st_size}")
     parts.sort()
@@ -484,6 +492,7 @@ def save_settings(data: dict) -> dict:
             raise ValueError("至少留一种文件：md 或 txt")
         current["note_types"] = types
     save_local_timebook(data)
+    fns.save_config(data)
     previous = read_settings()
     write_settings(current)
     if not HOTKEYS.restart():
@@ -579,9 +588,9 @@ def resolve_md(rel: str) -> Path:
     rel = (rel or "").replace("\\", "/").lstrip("/")
     if not rel or ".." in Path(rel).parts:
         raise ValueError("bad path")
-    root = vault_root()
+    root = task_root()
     if root is None:
-        raise ValueError("先选择笔记文件夹")
+        raise ValueError("先选择笔记文件夹，或填好同步地址")
     path = (root / rel).resolve()
     if path != root and root not in path.parents:
         raise ValueError("outside vault")
@@ -741,6 +750,9 @@ def write_note(path: Path, lines: list[str], ended: bool) -> None:
     body = "\n".join(lines)
     if ended:
         body += "\n"
+    if fns.handles(path):
+        fns.commit(path, body)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(body)
 
@@ -1025,15 +1037,16 @@ def set_note(rel: str, line_no: int, expected: str, text: str) -> dict:
 
 
 def collect() -> dict:
-    rev = vault_rev()
     words = name_keywords()
+    fns_stale = fns.refresh(words, note_suffixes()) if fns.enabled() else False
+    rev = vault_rev()
     notes = []
     for path in note_files():
         if not path.is_file() or "TaskForge" in path.parts:
             continue
         if not is_plan_name(path.name, words):
             continue
-        rel = path.relative_to(vault_root()).as_posix()
+        rel = path.relative_to(task_root()).as_posix()
         try:
             _, lines, _ = read_note(path)
         except OSError:
@@ -1077,9 +1090,10 @@ def collect() -> dict:
             }
         )
     other.sort(key=lambda item: (-item["open"], item["name"]))
-    root = vault_root()
+    root = task_root()
+    shown = vault_root()
     return {
-        "root": "" if root is None else str(root),
+        "root": "" if shown is None else str(shown),
         "vault_ok": bool(root and root.is_dir()),
         "browser": browser_choice(),
         "today": date.today().isoformat(),
@@ -1100,6 +1114,8 @@ def collect() -> dict:
         "peoples": cached_people(),
         **timebook_public(),
         **deepseek_public(),
+        **fns.public(),
+        "fns_stale": fns_stale,
         "rev": rev,
     }
 
@@ -1305,7 +1321,7 @@ def plan_target(needle: str) -> str:
     for path in note_files():
         if not path.is_file() or "TaskForge" in path.parts or not is_plan_name(path.name):
             continue
-        rel = path.relative_to(vault_root()).as_posix()
+        rel = path.relative_to(task_root()).as_posix()
         if needle in path.stem or needle in rel:
             matches.append(rel)
     if len(matches) != 1:

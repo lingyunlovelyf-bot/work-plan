@@ -1,5 +1,8 @@
 timebook.local.json
 timebook-cache.json
+fns.local.json
+fns-index.json
+fns-cache/
 loose-draft.json
 pop-refresh
 settings.json

@@ -969,6 +969,15 @@
             <h2>笔记</h2>
             <div class="set-row stack">
               <div>
+                <strong>同步服务</strong>
+                <p>填了地址、令牌和库名之后，任务以 Fast Note Sync 为准。写入前会再对一次版本，对不上就不写，并改用服务器上的新内容。连不上时只显示上次拿到的，不会写回去。本地文件夹只在没填同步时使用。</p>
+              </div>
+              <input id="fns-url" type="text" placeholder="http://地址:9000" autocomplete="off">
+              <input id="fns-vault" type="text" placeholder="库名" autocomplete="off">
+              <input id="fns-token" type="password" placeholder="令牌" autocomplete="off">
+            </div>
+            <div class="set-row stack">
+              <div>
                 <strong>笔记文件夹</strong>
                 <p>选一个文件夹。文件名里带下面这些词的笔记才会收进来。换完保存，马上按新的读。</p>
               </div>
@@ -2792,6 +2801,7 @@
         data = await response.json();
         applyColors((data && data.colors) || {});
         if (data.rev) seenRev = data.rev;
+        if (data.fns_stale) showNotice("这是上次从同步服务拿到的，现在连不上，不会写回去");
         scrollCurrent = false;
         restorePlace();
         render();
@@ -5400,6 +5410,10 @@
         input.value = chord(input.dataset.key);
       });
       document.querySelector("#shortcuts").value = shortcutLines();
+      document.querySelector("#fns-url").value = data.fns_url || "";
+      document.querySelector("#fns-vault").value = data.fns_vault || "";
+      document.querySelector("#fns-token").value = "";
+      document.querySelector("#fns-token").placeholder = data.has_fns_token ? "已保存，留空不改" : "令牌";
       document.querySelector("#timebook-url").value = data.timebook_url || "";
       document.querySelector("#timebook-token").value = "";
       document.querySelector("#timebook-token").placeholder = data.has_timebook_token ? "已保存，留空不改" : "令牌";
@@ -5456,6 +5470,9 @@
         global_loose: document.querySelector("#hotkey-loose").value,
         app_keys: readAppKeys(),
         create_shortcuts: document.querySelector("#shortcuts").value,
+        fns_url: document.querySelector("#fns-url").value,
+        fns_vault: document.querySelector("#fns-vault").value,
+        fns_token: document.querySelector("#fns-token").value,
         timebook_url: document.querySelector("#timebook-url").value,
         timebook_token: document.querySelector("#timebook-token").value,
         deepseek_base: document.querySelector("#deepseek-base").value,
