@@ -166,15 +166,41 @@ def spaces() -> list[dict]:
     saved = read_settings().get("spaces")
     if isinstance(saved, list) and saved:
         try:
-            return clean_spaces(saved)
+            rows = clean_spaces(saved)
         except ValueError:
-            pass
+            rows = []
+    else:
+        rows = []
+    if not rows:
+        root = vault_root()
+        if root is not None:
+            work_path = str(root)
+            life_path = str(root.parent / "05家庭")
+        else:
+            work_path = "03工作"
+            life_path = "05家庭"
+        rows = [
+            {"id": "work", "name": "工作", "path": work_path, "keywords": name_keywords()},
+            {"id": "life", "name": "生活", "path": life_path, "keywords": ["生活"]},
+        ]
+    for row in rows:
+        row["path"] = full_space_path(row["path"])
+    return rows
+
+
+def full_space_path(path: str) -> str:
+    raw = str(path or "").strip().strip('"')
+    if not raw:
+        return raw
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return str(candidate)
     root = vault_root()
-    work_path = root.name if root is not None else "03工作"
-    return [
-        {"id": "work", "name": "工作", "path": work_path, "keywords": name_keywords()},
-        {"id": "life", "name": "生活", "path": "05家庭", "keywords": ["生活"]},
-    ]
+    if root is None:
+        return raw
+    if candidate.name == root.name and len(candidate.parts) == 1:
+        return str(root)
+    return str(root.parent / candidate)
 
 
 def space_prefix(space: dict) -> str:

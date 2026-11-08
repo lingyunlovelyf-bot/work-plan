@@ -1015,7 +1015,7 @@
             <div class="set-row stack">
               <div>
                 <strong>空间</strong>
-                <p>全部是这些空间加在一起。在全部里新加的任务记到生活。路径写库里的文件夹，工作是 03工作，生活是 05家庭。文件名里要有关键词才会收进来。</p>
+                <p>每个空间写自己的文件夹完整路径。工作是 E:\my_note\03工作，生活是 E:\my_note\05家庭。上面的笔记文件夹是没开同步时用的那一个。文件名里要有关键词才会收进来。</p>
               </div>
               <div id="space-editor"></div>
               <button type="button" class="set-test" id="add-space">新增空间</button>
@@ -5592,7 +5592,7 @@
         path.className = "space-path";
         path.type = "text";
         path.value = space.path || "";
-        path.placeholder = "路径，例如 05家庭";
+        path.placeholder = "例如 E:\\my_note\\05家庭";
         const words = document.createElement("textarea");
         words.className = "space-words";
         words.value = Array.isArray(space.keywords) ? space.keywords.join("\n") : (space.keywords || "");
