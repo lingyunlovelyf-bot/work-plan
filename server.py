@@ -113,6 +113,123 @@ def name_keywords() -> list[str]:
     return words or list(PLAN_WORDS)
 
 
+def _keyword_list(raw) -> list[str]:
+    if isinstance(raw, str):
+        parts = re.split(r"[\n,，]", raw)
+    elif isinstance(raw, list):
+        parts = [str(item) for item in raw]
+    else:
+        parts = []
+    words = []
+    for part in parts:
+        word = part.strip()
+        if word and word not in words:
+            words.append(word)
+    return words
+
+
+def clean_spaces(raw) -> list[dict]:
+    if not isinstance(raw, list):
+        raise ValueError("空间没写对")
+    rows = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        path = str(item.get("path") or "").replace("\\", "/").strip().strip("/")
+        ident = str(item.get("id") or "").strip() or "s" + str(len(rows) + 1)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", ident):
+            raise ValueError("空间编号只能用字母和数字")
+        if ident in seen:
+            raise ValueError("空间重复了")
+        if not name or len(name) > 20:
+            raise ValueError("空间名字写 20 字以内")
+        if not path or len(path) > 180 or ".." in Path(path).parts:
+            raise ValueError("写下空间的路径")
+        words = _keyword_list(item.get("keywords"))
+        if not words:
+            raise ValueError(name + "至少留一个关键词")
+        for word in words:
+            if len(word) > 40 or "/" in word or "\\" in word:
+                raise ValueError("关键词写文件名里的一段")
+        rows.append({"id": ident, "name": name, "path": path, "keywords": words})
+        seen.add(ident)
+    if not rows:
+        raise ValueError("至少留一个空间")
+    if len(rows) > 20:
+        raise ValueError("最多 20 个空间")
+    return rows
+
+
+def spaces() -> list[dict]:
+    saved = read_settings().get("spaces")
+    if isinstance(saved, list) and saved:
+        try:
+            return clean_spaces(saved)
+        except ValueError:
+            pass
+    root = vault_root()
+    work_path = root.name if root is not None else "03工作"
+    return [
+        {"id": "work", "name": "工作", "path": work_path, "keywords": name_keywords()},
+        {"id": "life", "name": "生活", "path": "05家庭", "keywords": ["生活"]},
+    ]
+
+
+def space_prefix(space: dict) -> str:
+    raw = str(space.get("path") or "").replace("\\", "/").strip("/")
+    if len(raw) >= 2 and raw[1] == ":":
+        return Path(raw).name
+    return raw
+
+
+def space_dir(space: dict) -> Path | None:
+    raw = str(space.get("path") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    root = vault_root()
+    if root is None:
+        return None
+    if root.name == space_prefix(space):
+        return root
+    return root.parent / space_prefix(space)
+
+
+def file_in_space(rel: str, name: str, space: dict) -> bool:
+    prefix = space_prefix(space)
+    rel = (rel or "").replace("\\", "/").lstrip("/")
+    if prefix and not (rel == prefix or rel.startswith(prefix + "/")):
+        return False
+    return any(word in name for word in space.get("keywords") or [])
+
+
+def file_space(rel: str, name: str) -> dict | None:
+    for space in spaces():
+        if file_in_space(rel, name, space):
+            return space
+    return None
+
+
+def note_rel(path: Path) -> str:
+    if fns.enabled():
+        return path.resolve().relative_to(fns.mirror().resolve()).as_posix()
+    for space in spaces():
+        root = space_dir(space)
+        if root is None:
+            continue
+        try:
+            rest = path.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            continue
+        prefix = space_prefix(space)
+        return prefix + "/" + rest if prefix else rest
+    return path.name
+
+
 def browser_choice() -> str:
     text = str(read_settings().get("browser") or "edge").strip()
     return text or "edge"
@@ -160,16 +277,28 @@ def task_root() -> Path | None:
 
 
 def note_files():
-    root = task_root()
-    if root is None or not root.is_dir():
-        return
     wanted = note_suffixes()
     found = []
-    try:
-        for suffix in wanted:
-            found.extend(path for path in root.rglob("*" + suffix) if path.is_file())
-    except OSError:
-        return
+    seen = set()
+    roots = [fns.mirror()] if fns.enabled() else []
+    if not roots:
+        for space in spaces():
+            root = space_dir(space)
+            if root is not None:
+                roots.append(root)
+        if not roots and vault_root() is not None:
+            roots.append(vault_root())
+    for root in roots:
+        if root is None or not root.is_dir():
+            continue
+        try:
+            for suffix in wanted:
+                for path in root.rglob("*" + suffix):
+                    if path.is_file() and path not in seen:
+                        seen.add(path)
+                        found.append(path)
+        except OSError:
+            continue
     for path in found:
         yield path
 
@@ -376,7 +505,6 @@ def app_keys() -> dict:
 
 
 def vault_rev() -> str:
-    words = name_keywords()
     parts = []
     try:
         stat = SETTINGS.stat()
@@ -384,14 +512,15 @@ def vault_rev() -> str:
     except OSError:
         parts.append("settings:0")
     for path in note_files():
-        if not path.is_file() or "TaskForge" in path.parts or not is_plan_name(path.name, words):
+        if not path.is_file() or "TaskForge" in path.parts:
             continue
         try:
             stat = path.stat()
-        except OSError:
+            rel = note_rel(path)
+        except (OSError, ValueError):
             continue
-        root = task_root()
-        rel = path.relative_to(root).as_posix()
+        if file_space(rel, path.name) is None:
+            continue
         parts.append(f"{rel}:{stat.st_mtime_ns}:{stat.st_size}")
     parts.sort()
     return "|".join(parts)
@@ -408,7 +537,16 @@ def take_signal() -> dict:
 
 def save_settings(data: dict) -> dict:
     current = read_settings()
-    if "name_keywords" in data:
+    if "spaces" in data:
+        rows = clean_spaces(data.get("spaces"))
+        current["spaces"] = rows
+        words = []
+        for row in rows:
+            for word in row["keywords"]:
+                if word not in words:
+                    words.append(word)
+        current["name_keywords"] = words
+    elif "name_keywords" in data:
         raw = data.get("name_keywords")
         if isinstance(raw, str):
             parts = re.split(r"[\n,，]", raw)
@@ -501,6 +639,7 @@ def save_settings(data: dict) -> dict:
     return {
         "ok": True,
         "name_keywords": name_keywords(),
+        "spaces": spaces(),
         "global_hotkey": global_hotkey(),
         "global_show": show_hotkey(),
         "global_loose": loose_hotkey(),
@@ -588,12 +727,25 @@ def resolve_md(rel: str) -> Path:
     rel = (rel or "").replace("\\", "/").lstrip("/")
     if not rel or ".." in Path(rel).parts:
         raise ValueError("bad path")
-    root = task_root()
-    if root is None:
-        raise ValueError("先选择笔记文件夹，或填好同步地址")
-    path = (root / rel).resolve()
-    if path != root and root not in path.parents:
-        raise ValueError("outside vault")
+    if fns.enabled():
+        root = fns.mirror().resolve()
+        path = (root / rel).resolve()
+        if path != root and root not in path.parents:
+            raise ValueError("outside vault")
+    else:
+        path = None
+        for space in spaces():
+            root = space_dir(space)
+            prefix = space_prefix(space)
+            if root is None or not prefix or not (rel == prefix or rel.startswith(prefix + "/")):
+                continue
+            rest = rel[len(prefix):].lstrip("/")
+            candidate = (root / rest).resolve()
+            if candidate == root.resolve() or root.resolve() in candidate.parents:
+                path = candidate
+                break
+        if path is None:
+            raise ValueError("先选择笔记文件夹，或填好同步地址")
     if path.suffix.lower() not in note_suffixes() or not path.is_file():
         raise ValueError("不是能写的笔记")
     if "TaskForge" in path.parts:
@@ -1037,8 +1189,10 @@ def set_note(rel: str, line_no: int, expected: str, text: str) -> dict:
 
 
 def collect() -> dict:
-    words = name_keywords()
-    fns_stale = fns.refresh(words, note_suffixes()) if fns.enabled() else False
+    rows = spaces()
+    words = [word for space in rows for word in space["keywords"]]
+    rules = [(space_prefix(space), space["keywords"]) for space in rows]
+    fns_stale = fns.refresh(words, note_suffixes(), rules) if fns.enabled() else False
     rev = vault_rev()
     notes = []
     for path in note_files():
@@ -1046,38 +1200,49 @@ def collect() -> dict:
             continue
         if not is_plan_name(path.name, words):
             continue
-        rel = path.relative_to(task_root()).as_posix()
+        try:
+            rel = note_rel(path)
+        except ValueError:
+            continue
+        space = file_space(rel, path.name)
+        if space is None:
+            continue
         try:
             _, lines, _ = read_note(path)
         except OSError:
             continue
-        rows = task_rows(lines, open_only=False)
-        attach_notes(lines, rows)
-        notes.append((path.name, rel, lines, rows))
+        task_list = task_rows(lines, open_only=False)
+        attach_notes(lines, task_list)
+        notes.append((path.name, rel, lines, task_list, space["id"]))
 
-    plans = [item for item in notes if is_plan_name(item[0])]
+    plans = list(notes)
     plans.sort(key=lambda item: file_sort_key(item[0]), reverse=True)
     sections = []
-    primary = plans[0][1] if plans else None
-    for name, rel, _lines, rows in plans:
-        open_rows = [row for row in rows if not row["done"] and not row["cancelled"]]
-        if rel != primary and not rows:
+    primaries = {}
+    for name, rel, _lines, task_list, space_id in plans:
+        if space_id not in primaries:
+            primaries[space_id] = rel
+    primary = primaries.get("life") or (next(iter(primaries.values())) if primaries else None)
+    for name, rel, _lines, task_list, space_id in plans:
+        open_rows = [row for row in task_list if not row["done"] and not row["cancelled"]]
+        if rel != primaries.get(space_id) and not task_list:
             continue
         sections.append(
             {
                 "file": rel,
                 "name": name,
+                "space": space_id,
                 "open": len(open_rows),
-                "primary": rel == primary,
-                "tasks": rows,
+                "primary": rel == primaries.get(space_id),
+                "tasks": task_list,
             }
         )
 
     other = []
-    for name, rel, _, rows in notes:
-        if is_plan_name(name):
+    for name, rel, _, task_list, _space_id in notes:
+        if file_space(rel, name):
             continue
-        open_rows = [row for row in rows if not row["done"] and not row["cancelled"]]
+        open_rows = [row for row in task_list if not row["done"] and not row["cancelled"]]
         if not open_rows:
             continue
         other.append(
@@ -1101,6 +1266,7 @@ def collect() -> dict:
         "plans": sections,
         "other": other,
         "name_keywords": words,
+        "spaces": rows,
         "note_types": sorted(item.lstrip(".") for item in note_suffixes()),
         "global_hotkey": global_hotkey(),
         "global_show": show_hotkey(),
@@ -1319,9 +1485,14 @@ def parse_command(text: str) -> dict | None:
 def plan_target(needle: str) -> str:
     matches = []
     for path in note_files():
-        if not path.is_file() or "TaskForge" in path.parts or not is_plan_name(path.name):
+        if not path.is_file() or "TaskForge" in path.parts:
             continue
-        rel = path.relative_to(task_root()).as_posix()
+        try:
+            rel = note_rel(path)
+        except ValueError:
+            continue
+        if file_space(rel, path.name) is None:
+            continue
         if needle in path.stem or needle in rel:
             matches.append(rel)
     if len(matches) != 1:
@@ -3357,6 +3528,16 @@ def pick_folder() -> str:
     return (result.stdout or "").strip()
 
 
+def probe_fns(data: dict) -> dict:
+    saved = fns.read_config()
+    url = str(data.get("fns_url") or saved.get("url") or "")
+    vault = str(data.get("fns_vault") or saved.get("vault") or "")
+    token = str(data.get("fns_token") or "").strip() or str(saved.get("token") or "")
+    rules = [(space_prefix(space), space["keywords"]) for space in spaces()]
+    words = [word for _prefix, group in rules for word in group]
+    return fns.probe(url, token, vault, words or name_keywords(), note_suffixes(), rules)
+
+
 def probe_timebook(data: dict) -> dict:
     call = open_timebook(str(data.get("timebook_url") or ""), str(data.get("timebook_token") or ""))
     text = tool_text(call("get_current_datetime", {}))
@@ -3529,6 +3710,8 @@ class Handler(BaseHTTPRequestHandler):
                         data.get("hints") or "",
                         data.get("started") or "",
                     )
+            elif path == "/api/probe-fns":
+                result = probe_fns(data)
             elif path == "/api/probe-timebook":
                 result = probe_timebook(data)
             elif path == "/api/probe-deepseek":

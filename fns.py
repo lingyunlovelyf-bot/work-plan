@@ -102,8 +102,8 @@ def _store_index(notes: dict) -> None:
     INDEX.write_text(json.dumps({"notes": notes}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _request(method: str, route: str, query: dict | None = None, body: dict | None = None) -> dict:
-    saved = read_config()
+def _request(method: str, route: str, query: dict | None = None, body: dict | None = None, creds: dict | None = None) -> dict:
+    saved = creds if creds is not None else read_config()
     base = str(saved.get("url") or "").rstrip("/")
     token = str(saved.get("token") or "")
     if query:
@@ -175,6 +175,48 @@ def _get_note(vault: str, path: str) -> dict | None:
     return data
 
 
+def probe(url: str, token: str, vault: str, words: list[str], suffixes: set[str], rules: list | None = None) -> dict:
+    url = (url or "").strip().rstrip("/")
+    token = (token or "").strip()
+    vault = (vault or "").strip()
+    if not url or not token or not vault:
+        raise ValueError("先填地址、库名和令牌")
+    if not url.startswith(("http://", "https://")) or len(url) > 200:
+        raise ValueError("同步地址要以 http:// 或 https:// 开头")
+    if len(vault) > 80 or "/" in vault or "\\" in vault:
+        raise ValueError("库名写保险库的名字，不要带路径")
+    creds = {"url": url, "token": token}
+    found = set()
+    try:
+        for word in words:
+            page = 1
+            while page < 40:
+                data = _request(
+                    "GET",
+                    "/api/notes",
+                    {"vault": vault, "page": page, "pageSize": 100, "keyword": word, "searchMode": "path"},
+                    creds=creds,
+                )
+                batch = data.get("list") if isinstance(data, dict) else None
+                if not isinstance(batch, list):
+                    break
+                for item in batch:
+                    rel = str(item.get("path") or "").replace("\\", "/").lstrip("/")
+                    name = Path(rel).name
+                    if rules and not any(_under(rel, rule[0]) and _wanted(name, rule[1], suffixes) for rule in rules):
+                        continue
+                    if rel and _wanted(name, words, suffixes):
+                        found.add(rel)
+                if len(batch) < 100:
+                    break
+                page += 1
+    except OSError as exc:
+        raise ValueError("连不上同步服务") from exc
+    if not found:
+        return {"ok": True, "message": "连上了，没有文件名带关键词的规划"}
+    return {"ok": True, "message": f"连上了，找到 {len(found)} 篇规划"}
+
+
 def _wanted(name: str, words: list[str], suffixes: set[str]) -> bool:
     lower = name.lower()
     if not any(lower.endswith(suffix) for suffix in suffixes):
@@ -199,7 +241,15 @@ def _write_cache(rel: str, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
 
-def refresh(words: list[str], suffixes: set[str]) -> bool:
+def _under(rel: str, prefix: str) -> bool:
+    prefix = (prefix or "").replace("\\", "/").strip("/")
+    rel = (rel or "").replace("\\", "/").lstrip("/")
+    if not prefix:
+        return False
+    return rel == prefix or rel.startswith(prefix + "/")
+
+
+def refresh(words: list[str], suffixes: set[str], rules: list | None = None) -> bool:
     """Download notes whose server mtime changed. Returns True when the cache is stale."""
     if not enabled():
         return False
@@ -216,6 +266,8 @@ def refresh(words: list[str], suffixes: set[str]) -> bool:
             rel = str(item.get("path") or "").replace("\\", "/").lstrip("/")
             name = Path(rel).name
             if not rel or not _wanted(name, words, suffixes):
+                continue
+            if rules and not any(_under(rel, rule[0]) and _wanted(name, rule[1], suffixes) for rule in rules):
                 continue
             keep.add(rel)
             stamp = item.get("mtime")

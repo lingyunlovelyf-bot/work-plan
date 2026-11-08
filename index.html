@@ -101,6 +101,11 @@
     }
     .rail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .rail .space { margin: 4px 10px 8px; color: var(--muted); font-size: 12px; }
+    #space-list { display: flex; flex-direction: column; gap: 2px; margin: 0 0 8px; }
+    #space-list button { text-align: left; padding: 6px 10px; border-radius: 8px; color: #3a3a3a; }
+    #space-list button.on { background: var(--nav); color: var(--blue); }
+    .space-edit { display: grid; gap: 6px; margin: 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+    .space-edit textarea { min-height: 64px; }
     .pane-btn {
       height: 28px;
       padding: 0 8px;
@@ -866,6 +871,7 @@
         <p class="space">空间</p>
         <button type="button" class="pane-btn" id="shut-rail" aria-label="收起侧边栏">收起</button>
       </div>
+      <div id="space-list"></div>
       <nav>
         <button type="button" data-view="today"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5 2v2M11 2v2"/></svg><span>今天</span></button>
         <button type="button" data-view="tomorrow"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5 2v2M11 2v2M8 9h.01"/></svg><span>明天</span></button>
@@ -975,6 +981,10 @@
               <input id="fns-url" type="text" placeholder="http://地址:9000" autocomplete="off">
               <input id="fns-vault" type="text" placeholder="库名" autocomplete="off">
               <input id="fns-token" type="password" placeholder="令牌" autocomplete="off">
+              <div>
+                <button type="button" class="set-test" id="test-fns">测试</button>
+                <span class="set-test-result" id="fns-test-result"></span>
+              </div>
             </div>
             <div class="set-row stack">
               <div>
@@ -1002,12 +1012,13 @@
             </div>
             <div class="set-row stack">
               <div>
-                <strong>收进哪些笔记</strong>
-                <p>文件名里要有下面其中一个词，才会收进来。没有这些词的，比如操作手册，不会出现。一行一个词。txt 里的任务也写成 - [ ]。</p>
+                <strong>空间</strong>
+                <p>全部是这些空间加在一起。在全部里新加的任务记到生活。路径写库里的文件夹，工作是 03工作，生活是 05家庭。文件名里要有关键词才会收进来。</p>
               </div>
+              <div id="space-editor"></div>
+              <button type="button" class="set-test" id="add-space">新增空间</button>
               <label><input id="type-md" type="checkbox" checked> Markdown（.md）</label>
               <label><input id="type-txt" type="checkbox"> 文本（.txt）</label>
-              <textarea id="keywords" maxlength="800"></textarea>
             </div>
           </section>
           <section data-panel="keys" hidden>
@@ -1311,7 +1322,7 @@
     let selected = new Set();
     let collapsed = new Set();
     const seeded = new Set();
-    let filters = { file: "", level: "", tag: "", context: "", project: "", due: "", slice: "", query: "", showDone: false };
+    let filters = { file: "", level: "", tag: "", context: "", project: "", due: "", slice: "", query: "", showDone: false, space: localStorage.getItem("work-plan-space") || "" };
     let markTab = "projects";
     let recentKeys = [];
     let findIndex = 0;
@@ -1551,15 +1562,45 @@
     }
 
     function withFile(file, task) {
-      return Object.assign({ file: file.file, name: file.name }, task);
+      return Object.assign({ file: file.file, name: file.name, space: file.space || "" }, task);
     }
 
     function allRows() {
       const rows = [];
       for (const file of data.plans) {
+        if (filters.space && file.space !== filters.space) continue;
         for (const task of file.tasks) rows.push(withFile(file, task));
       }
       return rows;
+    }
+
+    function spaceFile() {
+      const plans = data.plans || [];
+      const id = filters.space || "life";
+      const hit = plans.find((file) => file.space === id && file.primary) || plans.find((file) => file.space === id);
+      if (hit) return hit.file;
+      const any = plans.find((file) => file.primary) || plans[0];
+      return any ? any.file : "";
+    }
+
+    function renderSpaces() {
+      const box = document.querySelector("#space-list");
+      if (!box) return;
+      const spaces = [{ id: "", name: "全部" }].concat(data.spaces || []);
+      if (filters.space && !spaces.some((space) => space.id === filters.space)) filters.space = "";
+      box.replaceChildren();
+      spaces.forEach((space) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = space.name;
+        button.classList.toggle("on", filters.space === space.id);
+        button.addEventListener("click", () => {
+          filters.space = space.id;
+          localStorage.setItem("work-plan-space", space.id);
+          render();
+        });
+        box.append(button);
+      });
     }
 
     function planTasks() {
@@ -2708,6 +2749,7 @@
       visible = [];
       seedCollapse();
       renderFilters();
+      renderSpaces();
       document.querySelectorAll(".rail nav button").forEach((button) => {
         button.classList.toggle("on", button.dataset.view === view);
       });
@@ -4945,8 +4987,8 @@
 
     async function createQuick(text) {
       const title = (text || "").trim();
-      if (!title || !data.primary) return;
-      const file = data.primary;
+      const file = spaceFile();
+      if (!title || !file) return;
       const body = await postJson("/api/add", { file, text: title }, true);
       if (document.documentElement.classList.contains("pop")) {
         if (!body) {
@@ -5389,7 +5431,7 @@
       if (!data) return;
       settingsEl.hidden = false;
       showSettingsNote("");
-      document.querySelector("#keywords").value = (data.name_keywords || []).join("\n");
+      renderSpaceEditor(data.spaces || []);
       const types = data.note_types || ["md"];
       document.querySelector("#type-md").checked = types.includes("md");
       document.querySelector("#type-txt").checked = types.includes("txt");
@@ -5428,6 +5470,7 @@
       document.querySelector("#marks-tags").value = (savedMarks.tags || []).join("、");
       document.querySelector("#marks-contexts").value = (savedMarks.contexts || []).join("、");
       document.querySelector("#marks-projects").value = (savedMarks.projects || []).join("、");
+      document.querySelector("#fns-test-result").textContent = "";
       document.querySelector("#timebook-test-result").textContent = "";
       document.querySelector("#deepseek-test-result").textContent = "";
       document.querySelector("#settings-search").value = "";
@@ -5461,7 +5504,7 @@
     });
     document.querySelector("#save-settings").addEventListener("click", async () => {
       const saved = await postJson("/api/settings", {
-        name_keywords: document.querySelector("#keywords").value,
+        spaces: readSpaces(),
         note_types: ["md", "txt"].filter((item) => document.querySelector("#type-" + item).checked),
         vault: document.querySelector("#vault").value,
         browser: document.querySelector("#browser-path").value.trim() || document.querySelector("#browser").value,
@@ -5508,6 +5551,57 @@
           render();
         }
         settingsEl.hidden = true;
+        await load();
+    });
+
+    function renderSpaceEditor(spaces) {
+      const box = document.querySelector("#space-editor");
+      if (!box) return;
+      box.replaceChildren();
+      (spaces || []).forEach((space) => {
+        const row = document.createElement("div");
+        row.className = "space-edit";
+        row.dataset.id = space.id || "";
+        const name = document.createElement("input");
+        name.className = "space-name";
+        name.type = "text";
+        name.value = space.name || "";
+        name.placeholder = "名字";
+        const path = document.createElement("input");
+        path.className = "space-path";
+        path.type = "text";
+        path.value = space.path || "";
+        path.placeholder = "路径，例如 05家庭";
+        const words = document.createElement("textarea");
+        words.className = "space-words";
+        words.value = Array.isArray(space.keywords) ? space.keywords.join("\n") : (space.keywords || "");
+        words.placeholder = "关键词，一行一个";
+        row.append(name, path, words);
+        if (space.id !== "work" && space.id !== "life") {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "set-test";
+          remove.textContent = "删除";
+          remove.addEventListener("click", () => row.remove());
+          row.append(remove);
+        }
+        box.append(row);
+      });
+    }
+
+    function readSpaces() {
+      return [...document.querySelectorAll("#space-editor .space-edit")].map((row) => ({
+        id: row.dataset.id,
+        name: row.querySelector(".space-name").value,
+        path: row.querySelector(".space-path").value,
+        keywords: row.querySelector(".space-words").value,
+      }));
+    }
+
+    document.querySelector("#add-space").addEventListener("click", () => {
+      const current = readSpaces();
+      current.push({ id: "s" + Date.now().toString().slice(-8), name: "", path: "", keywords: "" });
+      renderSpaceEditor(current);
     });
 
     async function runProbe(path, slot) {
@@ -5531,6 +5625,26 @@
         slot.textContent = error.message;
       }
     }
+    document.querySelector("#test-fns").addEventListener("click", async () => {
+      const slot = document.querySelector("#fns-test-result");
+      slot.textContent = "测试中";
+      try {
+        const response = await fetch("/api/probe-fns", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fns_url: document.querySelector("#fns-url").value,
+            fns_vault: document.querySelector("#fns-vault").value,
+            fns_token: document.querySelector("#fns-token").value,
+          }),
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "没通");
+        slot.textContent = body.message || "测试成功";
+      } catch (error) {
+        slot.textContent = error.message;
+      }
+    });
     document.querySelector("#test-timebook").addEventListener("click", () => {
       runProbe("/api/probe-timebook", document.querySelector("#timebook-test-result"));
     });
