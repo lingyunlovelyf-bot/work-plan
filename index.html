@@ -445,6 +445,16 @@
     #detail h3 { margin: 16px 0 8px; font-size: 14px; font-weight: 650; }
     #detail .subtask { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; }
     #detail .subtask .title { flex: 1; min-width: 0; cursor: pointer; }
+    #detail .subtask .when {
+      margin-left: auto;
+      flex: none;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 22px;
+      white-space: nowrap;
+    }
+    #detail .subtask .when.late { color: #d23b34; }
+    #detail .subtask .when + kbd { margin-left: 8px; }
     #detail .subtask kbd {
       margin-left: auto;
       flex: none;
@@ -2399,11 +2409,26 @@
       return text;
     }
 
+    function dateSource(task) {
+      if (!task) return null;
+      if (task.due || task.dueTime) return task;
+      const file = (data.plans || []).find((item) => item.file === task.file);
+      if (!file) return null;
+      const index = file.tasks.findIndex((row) => row.line === task.line);
+      if (index < 0) return null;
+      let indent = task.indent || 0;
+      for (let i = index - 1; i >= 0 && indent > 0; i -= 1) {
+        if (file.tasks[i].indent < indent) {
+          if (file.tasks[i].due || file.tasks[i].dueTime) return file.tasks[i];
+          indent = file.tasks[i].indent;
+        }
+      }
+      return null;
+    }
+
     function listDue(task) {
-      const text = dueLabel(task);
-      if (!text || text === "今天") return "";
-      if (text.startsWith("今天 ")) return text.slice(3);
-      return text;
+      const source = dateSource(task);
+      return source ? dueLabel(source) : "";
     }
 
     function detailRoot() {
@@ -2556,6 +2581,15 @@
           input.addEventListener("blur", () => finish(true));
         });
         row.append(box, name);
+        const whenText = listDue(child);
+        if (whenText) {
+          const when = document.createElement("span");
+          when.className = "when";
+          const source = dateSource(child);
+          if (source && source.due && source.due < data.today && !child.done) when.classList.add("late");
+          when.textContent = whenText;
+          row.append(when);
+        }
         if (depth === 1 && directIndex < 9) {
           const mark = document.createElement("kbd");
           mark.textContent = "Alt+" + (directIndex + 1);
@@ -2773,7 +2807,11 @@
           : (focused ? "记到时间书 · 从 " + focus.started : "记到时间书"))
         : "编辑";
       document.querySelector("#edit-title").value = task.title || "";
-      document.querySelector("#edit-note").value = task.note || "";
+      const note = document.querySelector("#edit-note");
+      const append = !sending;
+      mask.dataset.append = append ? "1" : "";
+      note.value = append ? "" : (task.note || "");
+      note.placeholder = append ? "写这次补上的" : "写备注";
       const extra = document.querySelector("#edit-extra");
       extra.value = "";
       extra.hidden = true;
@@ -2783,7 +2821,7 @@
       document.querySelector("#edit-done").hidden = false;
       mask.dataset.sending = sending ? "1" : "";
       mask.hidden = false;
-      (sending ? document.querySelector("#edit-note") : document.querySelector("#edit-title")).focus();
+      note.focus();
     }
 
     function openTaskEdit() {
@@ -2805,8 +2843,22 @@
         if (!saved) return null;
         fresh = currentTask() || task;
       }
-      if ((note || "") !== (fresh.note || "")) {
-        const saved = await postJson("/api/note", { file: fresh.file, line: fresh.line, raw: fresh.raw, text: note }, true);
+      const append = document.querySelector("#edit-mask").dataset.append === "1";
+      const typed = [note, document.querySelector("#edit-extra").value]
+        .map((item) => (item || "").replace(/\r\n/g, "\n").trim())
+        .filter(Boolean)
+        .join("\n");
+      let nextNote = null;
+      if (append) {
+        if (typed) {
+          const base = (fresh.note || "").trim();
+          nextNote = base ? base + "\n" + typed : typed;
+        }
+      } else if ((note || "") !== (fresh.note || "")) {
+        nextNote = note;
+      }
+      if (nextNote != null) {
+        const saved = await postJson("/api/note", { file: fresh.file, line: fresh.line, raw: fresh.raw, text: nextNote }, true);
         if (!saved) return null;
         fresh = currentTask() || fresh;
       }
@@ -3934,6 +3986,18 @@
       box.selectionStart = box.selectionEnd = pos;
     }
 
+    function continueIndent(box) {
+      const start = box.selectionStart;
+      const end = box.selectionEnd;
+      const value = box.value;
+      const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+      const indent = (value.slice(lineStart, start).match(/^[ \t]*/) || [""])[0];
+      const insert = "\n" + indent;
+      box.value = value.slice(0, start) + insert + value.slice(end);
+      const pos = start + insert.length;
+      box.selectionStart = box.selectionEnd = pos;
+    }
+
     function continueTaskLine(box) {
       const start = box.selectionStart;
       const end = box.selectionEnd;
@@ -3966,6 +4030,11 @@
         if (box.id === "page-text" && event.key === "Enter" && !event.shiftKey && !event.altKey) {
           event.preventDefault();
           continueTaskLine(box);
+          return;
+        }
+        if ((box.id === "create-text" || box.id === "child-text") && event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.isComposing) {
+          event.preventDefault();
+          continueIndent(box);
         }
       });
     }
@@ -4798,10 +4867,11 @@
         title.textContent = task.title;
         title.addEventListener("click", () => openHit(task));
         row.append(box, title);
-        if (task.due) {
+        const whenText = listDue(task);
+        if (whenText) {
           const due = document.createElement("span");
           due.className = "due";
-          due.textContent = dueLabel(task);
+          due.textContent = whenText;
           row.append(due);
         }
         row.addEventListener("mouseenter", () => {
@@ -4828,16 +4898,26 @@
       return rows.map((item) => item.key + "=" + item.label).join("\n");
     }
 
+    function focusCreateBox() {
+      const input = document.querySelector("#create-text");
+      if (!input || createMask.hidden) return;
+      const place = () => {
+        input.focus();
+        const end = input.value.length;
+        try { input.selectionStart = input.selectionEnd = end; } catch (error) { /* 还没显示出来 */ }
+      };
+      place();
+      setTimeout(place, 30);
+    }
+
     function openCreate(prefill) {
-      if (!data) return;
       findMask.hidden = true;
       createMask.hidden = false;
       const hint = document.querySelector("#create-hint");
-      if (hint) hint.textContent = ((data.create_shortcuts) || []).map((item) => item.key + " " + item.label).join(" · ");
+      if (hint && data && data.create_shortcuts) hint.textContent = data.create_shortcuts.map((item) => item.key + " " + item.label).join(" · ");
       const input = document.querySelector("#create-text");
-      input.value = prefill || "";
-      input.focus();
-      input.select();
+      if (prefill) input.value = prefill;
+      focusCreateBox();
     }
 
     async function createQuick(text) {
@@ -5492,11 +5572,20 @@
       document.title = title;
       document.querySelector("#create-mask").hidden = mode !== "create";
       document.querySelector("#loose-mask").hidden = mode !== "loose";
-      if (already) return;
+      if (already) {
+        if (mode === "create") focusCreateBox();
+        else document.querySelector("#loose-text").focus();
+        return;
+      }
       if (mode === "loose") openLoose();
-      else if (data) openCreate("");
+      else openCreate("");
     }
-    if (popMode) applyPop(popMode);
+    if (popMode) {
+      applyPop(popMode);
+      window.addEventListener("focus", () => {
+        if (popMode === "create") focusCreateBox();
+      });
+    }
     if (document.documentElement.classList.contains("pop")) {
       setInterval(() => {
         fetch("/api/pop").then((response) => response.json()).then((body) => {
