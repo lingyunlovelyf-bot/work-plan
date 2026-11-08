@@ -100,8 +100,10 @@
       overflow: hidden;
     }
     .rail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .rail .space { margin: 4px 10px 8px; color: var(--muted); font-size: 12px; }
-    #space-list { display: flex; flex-direction: column; gap: 2px; margin: 0 0 8px; }
+    #space-current { margin: 0; padding: 4px 8px; border-radius: 8px; color: #3a3a3a; }
+    #space-current:hover, #space-current[aria-expanded="true"] { background: #ececef; }
+    #space-list { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 8px; }
+    #space-list[hidden] { display: none; }
     #space-list button { text-align: left; padding: 6px 10px; border-radius: 8px; color: #3a3a3a; }
     #space-list button.on { background: var(--nav); color: var(--blue); }
     .space-edit { display: grid; gap: 6px; margin: 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
@@ -868,10 +870,10 @@
   <div class="app">
     <aside class="rail">
       <div class="rail-head">
-        <p class="space">空间</p>
+        <button type="button" id="space-current" aria-expanded="false">全部</button>
         <button type="button" class="pane-btn" id="shut-rail" aria-label="收起侧边栏">收起</button>
       </div>
-      <div id="space-list"></div>
+      <div id="space-list" hidden></div>
       <nav>
         <button type="button" data-view="today"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5 2v2M11 2v2"/></svg><span>今天</span></button>
         <button type="button" data-view="tomorrow"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5 2v2M11 2v2M8 9h.01"/></svg><span>明天</span></button>
@@ -1584,10 +1586,14 @@
     }
 
     function renderSpaces() {
+      const current = document.querySelector("#space-current");
       const box = document.querySelector("#space-list");
-      if (!box) return;
+      if (!current || !box) return;
       const spaces = [{ id: "", name: "全部" }].concat(data.spaces || []);
       if (filters.space && !spaces.some((space) => space.id === filters.space)) filters.space = "";
+      const picked = spaces.find((space) => space.id === filters.space) || spaces[0];
+      current.textContent = picked.name;
+      const open = !box.hidden;
       box.replaceChildren();
       spaces.forEach((space) => {
         const button = document.createElement("button");
@@ -1597,10 +1603,13 @@
         button.addEventListener("click", () => {
           filters.space = space.id;
           localStorage.setItem("work-plan-space", space.id);
+          box.hidden = true;
+          current.setAttribute("aria-expanded", "false");
           render();
         });
         box.append(button);
       });
+      box.hidden = !open;
     }
 
     function planTasks() {
@@ -4603,11 +4612,23 @@
       event.currentTarget.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
     });
     document.querySelector("#list-add").addEventListener("click", () => openFind());
+    document.querySelector("#space-current").addEventListener("click", (event) => {
+      event.stopPropagation();
+      const menu = document.querySelector("#space-list");
+      menu.hidden = !menu.hidden;
+      event.currentTarget.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
+    });
     document.addEventListener("click", (event) => {
       const menu = document.querySelector("#list-menu");
       if (!menu || menu.hidden || event.target.closest("#list-menu, #list-more")) return;
       menu.hidden = true;
       document.querySelector("#list-more").setAttribute("aria-expanded", "false");
+    });
+    document.addEventListener("click", (event) => {
+      const menu = document.querySelector("#space-list");
+      if (!menu || menu.hidden || event.target.closest("#space-list, #space-current")) return;
+      menu.hidden = true;
+      document.querySelector("#space-current").setAttribute("aria-expanded", "false");
     });
     document.querySelector("#page-save").addEventListener("click", savePageEdit);
     document.querySelector("#page-mask").addEventListener("pointerdown", (event) => {
